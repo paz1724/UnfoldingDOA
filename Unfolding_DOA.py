@@ -30,7 +30,8 @@ def Generate_config():
     'th_md_deg':        10.0,
 
     # debugging
-    'debug_plot': True, # True , False
+    'debug_plot': False, # True , False
+    'debug_loss': True,
 
     # training / unfolding
     # 'num_train':     3000,    # 1000
@@ -59,6 +60,7 @@ def Generate_config():
     'use_gating':      False,     # (4)
     'use_shrinkage':   False,     # (5)
     'constrain_gamma': False,     # γ = sigmoid(raw)
+    'constrain_p_lam': False,
     'delta_init':       1.0,     # initial raw δ
 
     # IAA
@@ -75,7 +77,7 @@ def Generate_config():
     'min_df_dist_combine_deg': 2.0,    # merge any two DOAs closer than 5°
     'max_num_of_est_doas':     7,
 
-    'mfocuss_p_init':      0.9,
+    'mfocuss_p_init':      0.5,
     'mfocuss_lambda_init': 0.1,      # λ₀
     
     'p_min_th':            1e-3,   # stop if p ≤ this
@@ -84,6 +86,7 @@ def Generate_config():
     'epsilon':             1e-3,   # frobenius‐norm convergence tol.
     's_norm_factor':       1.0,    # input normalization scale
     'prune_gamma_th_dB':   -20.0,  # gamma pruning threshold in dB
+    'gap_from_peak_dB':    20.0,
 
     # energy normalization
     'preserve_energy': False,
@@ -473,30 +476,31 @@ class LIAALayerConfig(nn.Module):
             return F.relu(s)
 
     def _mfocuss_update(self, gamma, A, X):
-        # recover p and λ from raw
-        # p_min = self.cfg['mfocuss_p_min']
-        # p_max = self.cfg['mfocuss_p_max']
-        # p = p_min + (p_max - p_min) * torch.sigmoid(self._raw_p)
-        p = self._raw_p
+        if self.cfg.get('constrain_p_lam'):
+            p_min = self.cfg['mfocuss_p_min']
+            p_max = self.cfg['mfocuss_p_max']
+            p = p_min + (p_max - p_min) * torch.sigmoid(self._raw_p)
 
-        # lam_min = self.cfg['mfocuss_lambda_min']
-        # lam_max = self.cfg['mfocuss_lambda_max']
-        # lam = lam_min + (lam_max - lam_min) * torch.sigmoid(self._raw_l)
-        lam = self._raw_l
+            lam_min = self.cfg['mfocuss_lambda_min']
+            lam_max = self.cfg['mfocuss_lambda_max']
+            lam = lam_min + (lam_max - lam_min) * torch.sigmoid(self._raw_l)
+        else:
+            p   = self._raw_p 
+            lam = self._raw_l
 
         # core update
         muVec = mfocuss_core(A, X, gamma, p, lam)
         
-        gamma_raw = torch.sqrt(torch.sum(torch.abs(muVec)**2, dim=1))
+        gamma_raw = torch.sqrt(torch.sum(torch.abs(muVec)**2, dim=1))+eps
 
         # 3) (optional) residual mixing — here it's identity unless you introduce a learnable δ
-        # if self.cfg.get('constrain_gamma'):
-        #     δ = torch.sigmoid(self._delta)
-        # else:
-        #     δ = 0
+        if self.cfg.get('constrain_gamma'):
+            δ = torch.sigmoid(self._delta)
+        else:
+            δ = self._delta
         
         if self.cfg.get('use_residual'):
-            u = gamma + self._delta * (gamma_raw - gamma)
+            u = gamma + δ * (gamma_raw - gamma)
         else:
             u = gamma_raw
   
@@ -728,8 +732,7 @@ import numpy as np
 
 def conv_nmse_loss(g_est: torch.Tensor,
                    g_true: torch.Tensor,
-                   cfg: dict,
-                   results: dict) -> torch.Tensor:
+                   cfg: dict) -> torch.Tensor:
     """
     1) Build a triangular kernel of support [-th_md_deg, +th_md_deg]
        in the same binning as theta_grid.
@@ -738,7 +741,6 @@ def conv_nmse_loss(g_est: torch.Tensor,
     3) Normalize each by its own peak absolute value.
     4) Compute NMSE( g_est_norm, g_true_norm ).
     """
-    eps        = 1e-12
     theta_grid = np.asarray(cfg['theta_grid_deg'], dtype=float)
     th_md_deg  = cfg['th_md_deg']
 
@@ -750,9 +752,7 @@ def conv_nmse_loss(g_est: torch.Tensor,
     if r >= 1:
         # 3) build triangular convolution kernel
         device = g_est.device
-        kernel = 1.0 - torch.abs(
-            torch.arange(-r, r+1, device=device, dtype=torch.float32)
-        )/r
+        kernel = 1.0 - torch.abs(torch.arange(-r, r+1, device=device, dtype=torch.float32))/r
         kernel = kernel.clamp(min=0.0)
         kernel = kernel / (kernel.sum() + eps)
         kernel = kernel.view(1,1,-1)  # for conv1d
@@ -775,7 +775,7 @@ def conv_nmse_loss(g_est: torch.Tensor,
         eps)
 
     # 6) optional debug plot
-    if cfg.get('debug_plot', False):
+    if cfg.get('debug_loss', False):
         # you may want to pass your real results/epoch/loss into this call
         Plot_gamma_hat_vs_true(
             g_true_n,   g_est_n,
@@ -786,69 +786,6 @@ def conv_nmse_loss(g_est: torch.Tensor,
 
     # 7) final NMSE
     return loss
-
-# def conv_nmse_loss(g_est: torch.Tensor,
-#                    g_true: torch.Tensor,
-#                    cfg, 
-#                    results) -> torch.Tensor:
-#     """
-#     1) Build a triangular kernel of support [-th_md_deg, +th_md_deg]
-#        in the same binning as theta_grid.
-#     2) Convolve g_est and g_true with that kernel (padding so output
-#        stays length L).
-#     3) Compute NMSE( g_hat_conv, g_true_conv ).
-#     """
-#     theta_grid = np.asarray(cfg['theta_grid_deg'], dtype=float)
-#     th_md_deg = cfg['th_md_deg']
-#     Peaks_inds = results['Peaks_inds']
-
-#     # compute grid spacing in degrees
-#     delta = float(theta_grid[1] - theta_grid[0])
-#     # kernel half‐width in bins
-#     r = int(round(th_md_deg / delta))
-#     # if threshold smaller than one bin, just fall back to plain NMSE
-#     if r < 1:
-#         return nmse_loss(g_hat.unsqueeze(0), g_true.unsqueeze(0), eps)
-
-#     device = g_est.device
-#     # build triangular weights: w[i] = 1 - |i|/r  for i=-r..+r
-#     kernel = 1.0 - torch.abs(torch.arange(-r, r+1,
-#                                          device=device,
-#                                          dtype=torch.float32)) / r
-#     kernel = kernel.clamp(min=0.0)
-#     # normalize so area=1
-#     kernel = kernel / kernel.sum()
-
-#     # shape for conv1d: (out_channels=1, in_channels=1, kernel_size=2r+1)
-#     kernel = kernel.view(1, 1, -1)
-
-#     # convolve g_hat
-#     #   g_hat: (L,)  → pad & shape (1,1,L) → conv → (1,1,L) → squeeze → (L,)
-#     g_est_conv = (F.conv1d(
-#         g_est.view(1,1,-1),
-#         kernel,
-#         padding=r
-#     ).view(-1))
-
-#     # convolve g_true
-#     g_true_conv = (F.conv1d(
-#         g_true.view(1,1,-1),
-#         kernel,
-#         padding=r
-#     ).view(-1))
-
-#     # Calculate Loss
-#     loss = nmse_loss(
-#         g_est_conv.unsqueeze(0),
-#         g_true_conv.unsqueeze(0),
-#         eps)
-
-#     # Plot_gamma_hat_vs_true
-#     if cfg['debug_plot']:
-#         Plot_gamma_hat_vs_true(g_true_conv, g_est_conv, None, None, loss)
-                           
-#     # final NMSE
-#     return loss
 
 def wrap_to_180(x):
     return ((x + 180) % 360) - 180
@@ -975,6 +912,18 @@ def find_peaks_local(gamma: np.ndarray,
     # 4) return both indices and the angle locations
     return chosen, theta_grid[chosen]
 
+def Calc_min_height(gamma_np):
+    gap_db = config.get('gap_from_peak_dB', None)
+    if gap_db is not None:
+        gamma_db       = 10 * np.log10(gamma_np + eps)
+        max_db         = np.nanmax(gamma_db)
+        min_height_db  = max_db - gap_db
+        min_height     = 10 ** (min_height_db / 10)
+    else:
+        min_height = None
+
+    return min_height
+
 def find_peaks(g_hat, K):
     gamma_np   = g_hat.detach().cpu().numpy()
     theta_grid = config['theta_grid_deg']
@@ -985,13 +934,16 @@ def find_peaks(g_hat, K):
 
     # 2) convert the angular separation into an integer index distance
     min_peak_distance = max(1, int(np.round(deg_sep / Δθ)))
+    
+    # 2) compute minimum height (in dB) = max_peak - gap_from_peak_dB
+    min_height = Calc_min_height(gamma_np)
 
     # 3) call your local‐peak finder with that index separation
     idxs, est_angles = find_peaks_local(
         gamma_np,
         theta_grid,
         K,
-        min_height=None,
+        min_height=min_height,
         min_distance=min_peak_distance
     )
     return idxs, est_angles
@@ -1111,19 +1063,21 @@ def train_model(net, loader, optimizer, cfg):
             # 2) Compute & gather DOA results for this sample
             results, g_est = calc_doa_results(g_hat, cfg)
 
+            if cfg['debug_loss']:
+                Plot_gamma_hat_vs_true(g0, g_hat, results)
+
             # Show_power_spectrum
             if cfg['debug_plot']:
-                Plot_gamma_hat_vs_true(g0, g_hat, results)
                 Show_power_spectrum(gamma_progress, results, g_true, g_est)
                 
             # 3) Convolutional NMSE Loss
-            loss = conv_nmse_loss(g_est, g_true, cfg, results)
+            loss = conv_nmse_loss(g_est, g_true, cfg)
 
             # 4) Back-propogation
             loss.backward()
 
             # 5) clip_grad_norm_
-            # torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
 
             # Optimizer Step
             optimizer.step()
