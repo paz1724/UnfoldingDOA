@@ -18,93 +18,101 @@ from tqdm.auto import tqdm
 # ——————————————————————————————————————————————————————————————
 def Generate_config():
     config = {
-    # array & data
-    'N':               5,           # sensors
-    'T':               8,           # snapshots per sample
-    'L':            1801,           # grid size
-    'K':               2,           # sources per sample (overridden if fixed GT)
-    'SNR_dB_range':  (30.0, 30.0),  # desired SNR range in dB 
+        # array & data
+        'N':               5,           # sensors
+        'T':               8,           # snapshots per sample
+        'L':            1801,           # grid size
+        'K':               2,           # sources per sample (overridden if fixed GT)
+        'SNR_dB_range':  (30.0, 30.0),  # desired SNR range in dB 
 
-    # fixed GT (or None for random)
-    'gt_angles_deg':   None,
-    'th_md_deg':        10.0,
+        # fixed GT (or None for random)
+        'gt_angles_deg':   None,
+        'th_md_deg':        10.0,
 
-    # debugging
-    'debug_plot': False, # True , False
-    'debug_loss': True,
+        # debugging
+        'debug_plot': False, # True , False
+        'debug_loss': False,
 
-    # training / unfolding
-    # 'num_train':     3000,    # 1000
-    # 'num_test':      200,     # 200
-    # 'num_epochs':    100,     # 100
-    # 'batch_size':    128,      # 64
+        # training / unfolding
+        # 'num_train':     3000,    # 1000
+        # 'num_test':      200,     # 200
+        # 'num_epochs':    100,     # 100
+        # 'batch_size':    128,      # 64
 
-    'num_train':     16,    # 1000
-    'num_test':      8,     # 200
-    'num_epochs':    10,    # 100
-    'batch_size':    4,     # 128
+        'num_train':     16,    # 1000
+        'num_test':      8,     # 200
+        'num_epochs':    10,    # 100
+        'batch_size':    4,     # 128
 
-    'num_layers':    50,     # unfolding depth
-    'learning_rate': 1e-3,
-    'weight_decay':  1e-4,
+        'num_layers':    50,     # unfolding depth
+        'learning_rate': 1e-2,
+        'weight_decay':  1e-3,
 
-    # algorithm selection
-    'algorithm':    'MFOCUSS',       # 'IAA' or 'MFOCUSS'
-    'mode':         'unfolded',   # 'unfolded' or 'classic'
-    'classic_iters': 100,          # iterations for classic
+        # algorithm selection
+        'algorithm':    'MFOCUSS',       # 'IAA' or 'MFOCUSS'
+        'mode':         'unfolded',   # 'unfolded' or 'classic'
+        'classic_iters': 100,          # iterations for classic
 
-    # --- DNN options ---
-    'use_residual':    False,     # (1) u = p + γ*(v-p)
-    'use_layernorm':   False,     # (2)
-    'use_attention':   False,     # (3)
-    'use_gating':      False,     # (4)
-    'use_shrinkage':   False,     # (5)
-    'constrain_gamma': False,     # γ = sigmoid(raw)
-    'constrain_p_lam': False,
-    'delta_init':       1.0,     # initial raw δ
+        # --- DNN options ---
+        'use_residual':    False,     # (1) u = p + γ*(v-p)
+        'use_layernorm':   False,     # (2)
+        'use_attention':   False,     # (3)
+        'use_gating':      False,     # (4)
+        'use_shrinkage':   False,     # (5)
+        'constrain_gamma': False,     # γ = sigmoid(raw)
+        
+        'delta_init':       1.0,     # initial raw δ
 
-    # IAA
-    'use_ridge':       False,     # +ridge on R
-    'ridge_reg':       1e-3,     # δ
-    
-    'lmbda_init':       0.1,     # IAA shrinkage λ init
+        # IAA
+        'use_ridge':       False,     # +ridge on R
+        'ridge_reg':       1e-3,     # δ
+        
+        'lmbda_init':       0.1,     # IAA shrinkage λ init
 
-    # --- Classic M-FOCUSS params ---
-    'max_est_peaks':       2,
-    'p_decay_rate':        0.1,    # p ← p_init * exp(-p_decay_rate * k)
-    'lambda_growth_rate':  0.1,    # λ growth exponent
+        # --- Classic M-FOCUSS params ---
+        'max_est_peaks':       2,
+        'p_decay_rate':        0.1,    # p ← p_init * exp(-p_decay_rate * k)
+        'lambda_growth_rate':  0.1,    # λ growth exponent
 
-    'min_df_dist_combine_deg': 2.0,    # merge any two DOAs closer than 5°
-    'max_num_of_est_doas':     7,
+        'min_df_dist_combine_deg': 2.0,    # merge any two DOAs closer than 5°
+        'max_num_of_est_doas':     7,
 
-    'mfocuss_p_init':      0.5,
-    'mfocuss_lambda_init': 0.1,      # λ₀
-    
-    'p_min_th':            1e-3,   # stop if p ≤ this
-    'lambda_max_th':       1e-2,   # stop-growth threshold
+        'mfocuss_p_init':      0.1,
+        'mfocuss_lambda_init': 0.1,      # λ₀
+        
+        'p_min_th':            1e-3,   # stop if p ≤ this
+        'lambda_max_th':       1e-2,   # stop-growth threshold
 
-    'epsilon':             1e-3,   # frobenius‐norm convergence tol.
-    's_norm_factor':       1.0,    # input normalization scale
-    'prune_gamma_th_dB':   -20.0,  # gamma pruning threshold in dB
-    'gap_from_peak_dB':    20.0,
+        'epsilon':             1e-3,   # frobenius‐norm convergence tol.
+        's_norm_factor':       1.0,    # input normalization scale
+        'prune_gamma_th_dB':   -20.0,  # gamma pruning threshold in dB
+        'gap_from_peak_dB':    20.0,
 
-    # energy normalization
-    'preserve_energy': False,
+        # energy normalization
+        'preserve_energy': False,
 
-    # M-FOCUSS “unfolded” hyper‐limits (if you still use it)
-    'mfocuss_p_min':       0.001,
-    'mfocuss_p_max':       0.99,
-    
-    'mfocuss_lambda_min':  0.0,
-    'mfocuss_lambda_max':  1e-2,
+        # M-FOCUSS “unfolded” hyper‐limits (if you still use it)
+        # 'mfocuss_p_min':       0.001,
+        # 'mfocuss_p_max':       0.99,
+        
+        # 'mfocuss_lambda_min':  0.0,
+        # 'mfocuss_lambda_max':  1e-2,
 
-    # CS normalization parameters
-    's_norm_factor': {
-        'nfMode': 'All',  # Can be "Legacy", "Elements", or "All"
-        'nfRMS': 15.0,     # RMS normalization factor
-        'nfLegacyRMS': 100.0  # Legacy RMS normalization factor
-    },
-}
+        'constrain_p_lam': True,
+
+        'mfocuss_p_min':  0.05,   # keep away from 0
+        'mfocuss_p_max':  0.95,    # strictly < 2 to avoid negative exponent issues
+
+        'mfocuss_lambda_min': 1e-7,
+        'mfocuss_lambda_max': 1e-2,
+
+        # CS normalization parameters
+        's_norm_factor': {
+            'nfMode': 'All',  # Can be "Legacy", "Elements", or "All"
+            'nfRMS': 15.0,     # RMS normalization factor
+            'nfLegacyRMS': 100.0  # Legacy RMS normalization factor
+        },
+    }
 
 # ——————————————————————————————————————————————————————————————
 # 0b) Global angle grid
@@ -171,11 +179,11 @@ def save_history(history: dict,
                  tags: list,
                  log_dir: str,
                  filename: str,
-                 mode: str):
+                 mode: str = "Train"):
     """
-    history: dict[name] -> list of lists, shape = (n_samples, n_sub)
-    tags:    list of length n_samples, e.g. ["e1_b1","e1_b2",…]
-    mode:    "Train" or "Test"
+    history: dict[name] -> list of lists (each inner list has length = n_sub)
+    tags:    list of strings, one per “row” (either epoch_batch tags or sample tags)
+    mode:    "Train" or "Test" to choose row‐index naming
     """
     os.makedirs(log_dir, exist_ok=True)
     path = os.path.join(log_dir, filename)
@@ -183,33 +191,34 @@ def save_history(history: dict,
 
     with pd.ExcelWriter(path, engine="openpyxl", mode="w") as writer:
         for name, hist in history.items():
-            arr = np.asarray(hist)  # shape = (n_samples, n_sub)
-            n_samples, n_sub = arr.shape
+            # hist: List[List], shape = (n_samples, n_sub)
+            n_samples = len(hist)
+            n_sub     = len(hist[0]) if n_samples>0 else 0
 
-            # build DataFrame: rows=samples, cols=subindices
-            # we'll then transpose to get rows=subindices, columns=samples
+            # build DataFrame; pandas will pad ragged entries with NaN
             df = pd.DataFrame(
-                np.round(arr, 3),
+                hist,
                 index=tags,
                 columns=[f"{name}_{j}" for j in range(n_sub)]
             )
-            df.index.name = "sample"
-            # transpose: rows=subindices, cols=samples
-            df_t = df.T
+            df.index.name = "sample" if mode=="Test" else "epoch_batch"
 
-            # write sheet
+            # transpose so rows = sub‐items, cols = samples
+            df_t = df.T
             df_t.to_excel(writer, sheet_name=name)
+
             ws = writer.sheets[name]
 
-            # auto‐fit columns
+            # 1) Auto‐fit column widths
             Auto_fit_column_widths(ws)
 
-            # conditional formatting over the data block
-            # data block runs from B2 to <col><row>
+            # 2) Conditional formatting over the data block B2:<col><row>
             Conditional_formatting(ws, n_samples, n_sub)
 
-            # Limit decimal digits
+            # 3) Limit all floats to 3 decimal digits
             Limit_decimal_digits(ws)
+
+    print("→ Done.")
 
 def Update_history(history, results, net):
     epoch_vals = {}
@@ -532,6 +541,9 @@ class LIAALayerConfig(nn.Module):
         else:
             gamma_new = F.relu(s)
         
+        gamma_new = torch.nan_to_num(gamma_new, nan=0.0, posinf=1e6, neginf=0.0)
+        gamma_new = torch.clamp(gamma_new, min=0.0)
+
         return gamma_new
 
     def forward(self, gamma, A, X):
@@ -608,7 +620,9 @@ def mfocuss_core(A, Y, gamma, p, lam):
 
     W = torch.diag(gamma ** (1 - p/2)).to(A.dtype).to(A.device)
     AW = A @ W
-    M  = AW @ AW.conj().T + lam * I
+    lam_eff = torch.clamp(lam, min=1e-8)  # enforce strictly positive
+    M  = AW @ AW.conj().T + lam_eff * I
+    # M  = AW @ AW.conj().T + lam * I
 
     Q = AW.conj().T @ (torch.linalg.inv(M) @ Y)
     muVec = W @ Q
@@ -725,10 +739,6 @@ def nmse_loss(g_hat, g_true, eps=1e-12):
     num = torch.sum((g_hat - g_true)**2, dim=1)
     den = torch.sum(g_true**2, dim=1) + eps
     return torch.mean(num / den)
-
-import torch
-import torch.nn.functional as F
-import numpy as np
 
 def conv_nmse_loss(g_est: torch.Tensor,
                    g_true: torch.Tensor,
@@ -876,7 +886,7 @@ def calc_doa_results(g_hat: torch.Tensor,
         'MD'               : md_rate,
         'FA'               : fa_rate
     }
-
+    
     return results, g_est
 
 # ——————————————————————————————————————————————————————————————
