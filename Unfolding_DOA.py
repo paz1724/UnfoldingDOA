@@ -2,6 +2,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torchinfo import summary
 import numpy as np
 import os
 import pandas as pd
@@ -34,23 +35,26 @@ def Generate_config():
         'debug_loss': False,
 
         # training / unfolding
-        # 'num_train':     3000,    # 1000
-        # 'num_test':      200,     # 200
-        # 'num_epochs':    100,     # 100
-        # 'batch_size':    128,      # 64
+        'num_train':     3000,    # 1000
+        'num_test':      200,     # 200
+        'num_epochs':    100,     # 100
+        'batch_size':    128,      # 64
 
-        'num_train':     16,    # 1000
-        'num_test':      8,     # 200
-        'num_epochs':    10,    # 100
-        'batch_size':    4,     # 128
+        'param_predictor_module': 'ComplexConv',  # FullyConnected , MLP , Transformer , Mixer , ComplexConv
 
-        'num_layers':    50,     # unfolding depth
-        'learning_rate': 1e-2,
-        'weight_decay':  1e-3,
+        # 'num_train':     16,    # 1000
+        # 'num_test':      8,     # 200
+        # 'num_epochs':    10,    # 100
+        # 'batch_size':    4,     # 128
+
+        'num_layers':    17,     # unfolding depth
+        'learning_rate': 1e-1,
+        'weight_decay':  1e-2,
 
         # algorithm selection
         'algorithm':    'MFOCUSS',       # 'IAA' or 'MFOCUSS'
         'mode':         'unfolded',   # 'unfolded' or 'classic'
+        'param_predictor': 'mlp',      # 'mlp', 'transformer', 'mixer', 'complexconv'
         'classic_iters': 100,          # iterations for classic
 
         # --- DNN options ---
@@ -77,8 +81,8 @@ def Generate_config():
         'min_df_dist_combine_deg': 2.0,    # merge any two DOAs closer than 5°
         'max_num_of_est_doas':     7,
 
-        'mfocuss_p_init':      0.1,
-        'mfocuss_lambda_init': 0.1,      # λ₀
+        'mfocuss_p_init':      1e-3,   # 0.1,
+        'mfocuss_lambda_init': 1e-2,   # 0.1,      # λ₀
         
         'p_min_th':            1e-3,   # stop if p ≤ this
         'lambda_max_th':       1e-2,   # stop-growth threshold
@@ -232,7 +236,70 @@ def Update_history(history, results, net):
     for name, arr in results.items():
         a = arr.detach().cpu().numpy() if hasattr(arr, "detach") else np.asarray(arr)
         history.setdefault(name, []).append(a.flatten().tolist())
-    
+
+from torchinfo import summary
+
+def show_model_summary(model: nn.Module, input_shape: tuple, model_name: str = "Param Predictor", is_complex=False):
+    print(f"\n{'='*60}")
+    print(f"📦 Model Summary: {model_name}")
+    print(f"{'='*60}")
+
+    if is_complex:
+        dummy_input = torch.randn(input_shape, dtype=torch.complex64)
+    else:
+        dummy_input = torch.randn(input_shape)
+
+    # ✅ Only add 1 batch dimension
+    if dummy_input.dim() == 3:
+        dummy_input = dummy_input.unsqueeze(0)  # (1, C, H, W)
+    elif dummy_input.dim() == 2:
+        dummy_input = dummy_input.unsqueeze(0)  # (1, input_dim)
+
+    summary(model,
+            input_data=dummy_input,
+            col_names=["input_size", "output_size", "num_params"],
+            depth=4)
+
+    print(f"{'='*60}\n")
+
+# def show_model_summary(model: nn.Module, input_shape: tuple, model_name: str = "Param Predictor", is_complex=False):
+#     print(f"\n{'='*60}")
+#     print(f"📦 Model Summary: {model_name}")
+#     print(f"{'='*60}")
+
+#     # Create dummy input with correct dtype
+#     if is_complex:
+#         dummy_input = torch.randn(input_shape, dtype=torch.complex64)
+#     else:
+#         dummy_input = torch.randn(input_shape)
+
+#     # Add batch dimension
+#     dummy_input = dummy_input.unsqueeze(0)
+
+#     summary(model,
+#             input_data=dummy_input,
+#             col_names=["input_size", "output_size", "num_params"],
+#             depth=4)
+
+#     print(f"{'='*60}\n")
+
+
+# def show_model_summary(model: nn.Module, input_shape: tuple, model_name: str = "Param Predictor"):
+#     """
+#     Display the architecture summary of a learning model.
+
+#     Parameters:
+#     - model (nn.Module): the instantiated PyTorch model (MLP, Transformer, etc.)
+#     - input_shape (tuple): the shape of the model input (excluding batch dimension)
+#     - model_name (str): optional name to display
+#     """
+#     print(f"\n{'='*60}")
+#     print(f"📦 Model Summary: {model_name}")
+#     print(f"{'='*60}")
+#     summary(model, input_size=(1, *input_shape), col_names=["input_size", "output_size", "num_params"], depth=4)
+#     print(f"{'='*60}\n")
+
+
 # ——————————————————————————————————————————————————————————————
 # 3) Debug plots
 # ——————————————————————————————————————————————————————————————
@@ -484,18 +551,22 @@ class LIAALayerConfig(nn.Module):
         else:
             return F.relu(s)
 
-    def _mfocuss_update(self, gamma, A, X):
+    def _mfocuss_update(self, gamma, A, X, unfolded_params: dict):
+
+        raw_p = unfolded_params.get('raw_p')
+        raw_l = unfolded_params.get('raw_lambda')
+
         if self.cfg.get('constrain_p_lam'):
             p_min = self.cfg['mfocuss_p_min']
             p_max = self.cfg['mfocuss_p_max']
-            p = p_min + (p_max - p_min) * torch.sigmoid(self._raw_p)
+            p = p_min + (p_max - p_min) * torch.sigmoid(raw_p)
 
             lam_min = self.cfg['mfocuss_lambda_min']
             lam_max = self.cfg['mfocuss_lambda_max']
-            lam = lam_min + (lam_max - lam_min) * torch.sigmoid(self._raw_l)
+            lam = lam_min + (lam_max - lam_min) * torch.sigmoid(raw_l)
         else:
-            p   = self._raw_p 
-            lam = self._raw_l
+            p   = raw_p 
+            lam = raw_l
 
         # core update
         muVec = mfocuss_core(A, X, gamma, p, lam)
@@ -546,9 +617,9 @@ class LIAALayerConfig(nn.Module):
 
         return gamma_new
 
-    def forward(self, gamma, A, X):
+    def forward(self, gamma, A, X, unfolded_params: dict):
         if self.cfg['algorithm'] == 'MFOCUSS':
-            return self._mfocuss_update(gamma, A, X)
+            return self._mfocuss_update(gamma, A, X, unfolded_params)
         else:
             return self._iaa_update(gamma, A, X)
 
@@ -620,7 +691,7 @@ def mfocuss_core(A, Y, gamma, p, lam):
 
     W = torch.diag(gamma ** (1 - p/2)).to(A.dtype).to(A.device)
     AW = A @ W
-    lam_eff = torch.clamp(lam, min=1e-8)  # enforce strictly positive
+    lam_eff = torch.clamp(torch.tensor(lam), min=1e-8)  # enforce strictly positive
     M  = AW @ AW.conj().T + lam_eff * I
     # M  = AW @ AW.conj().T + lam * I
 
@@ -704,13 +775,246 @@ def classic_mfocuss(A, X, cfg, max_iters):
 # ——————————————————————————————————————————————————————————————
 # 6) Unfolded network definition
 # ——————————————————————————————————————————————————————————————
+class TransformerParamPredictor(nn.Module):
+    """
+    Transformer-based predictor for raw_p and raw_lambda from complex-valued input X.
+    Input X is shaped (N, T_snap), interpreted as a sequence of T_snap vectors of dim N.
+    """
+
+    def __init__(self, cfg):
+        super().__init__()
+        self.cfg = cfg
+        self.N = cfg['N']
+        self.T_snap = cfg['T']
+        self.num_layers = cfg['num_layers']
+        self.embed_dim = 64
+        self.num_heads = 4
+        self.ff_dim = 128
+
+        # Project real+imag components of X into embedding
+        self.input_proj = nn.Linear(2 * self.N, self.embed_dim)
+
+        # Transformer encoder
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=self.embed_dim,
+            nhead=self.num_heads,
+            dim_feedforward=self.ff_dim,
+            batch_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=2)
+
+        # Final projection to raw_p and raw_lambda
+        self.out_proj = nn.Linear(self.embed_dim, 2 * self.num_layers)
+
+    def forward(self, X):
+        # X: (N, T_snap), complex
+        x_real = X.real.transpose(0, 1)  # (T_snap, N)
+        x_imag = X.imag.transpose(0, 1)  # (T_snap, N)
+        x = torch.cat([x_real, x_imag], dim=-1)  # (T_snap, 2N)
+
+        # Add batch dim: (1, T_snap, 2N)
+        x = self.input_proj(x.unsqueeze(0))  # (1, T_snap, embed_dim)
+        x = self.encoder(x)  # (1, T_snap, embed_dim)
+
+        # Mean pooling across time dimension
+        x_pooled = x.mean(dim=1)  # (1, embed_dim)
+
+        # Output projection
+        out = self.out_proj(x_pooled).squeeze(0)  # (2 * T,)
+
+        unfolded_params = {
+            'raw_p': out[:self.num_layers],
+            'raw_lambda': out[self.num_layers:]
+        }
+        return unfolded_params
+
+class MixerParamPredictor(nn.Module):
+    """
+    MLP-Mixer-inspired model for parameter prediction from input X (N × T_snap).
+    """
+
+    def __init__(self, cfg):
+        super().__init__()
+        self.cfg = cfg
+        self.N = cfg['N']
+        self.T_snap = cfg['T']
+        self.num_layers = cfg['num_layers']
+        hidden_dim = 64
+        token_dim = 128
+        channel_dim = 128
+
+        self.norm = nn.LayerNorm(2 * self.T_snap)
+
+        # Project real+imag to tokens
+        self.token_mlp = nn.Sequential(
+            nn.Linear(2 * self.T_snap, token_dim),
+            nn.GELU(),
+            nn.Linear(token_dim, 2 * self.T_snap)
+        )
+
+        self.channel_mlp = nn.Sequential(
+            nn.Linear(self.N, channel_dim),
+            nn.GELU(),
+            nn.Linear(channel_dim, self.N)
+        )
+
+        self.out_proj = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(self.N * 2 * self.T_snap, 128),
+            nn.ReLU(),
+            nn.Linear(128, 2 * self.num_layers)
+        )
+
+    def forward(self, X):
+        # X: (N, T_snap), complex
+        x_real = X.real  # (N, T)
+        x_imag = X.imag  # (N, T)
+        x = torch.cat([x_real, x_imag], dim=-1)  # (N, 2T)
+
+        # Token mixing
+        x = self.token_mlp(self.norm(x)) + x
+
+        # Channel mixing
+        x = x.transpose(0, 1)  # (2T, N)
+        x = self.channel_mlp(x) + x
+        x = x.transpose(0, 1)  # (N, 2T)
+
+        out = self.out_proj(x)  # (2 * T,)
+        unfolded_params = {
+            'raw_p': out[:self.num_layers],
+            'raw_lambda': out[self.num_layers:]
+        }
+        return unfolded_params
+
+class MLPParamPredictor(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.cfg = cfg
+        self.N = cfg['N']
+        self.T_snap = cfg['T']
+        self.num_layers = cfg['num_layers']
+
+        input_dim = 2 * self.N * self.T_snap
+        hidden_dim = 128
+        output_dim = 2 * self.num_layers
+
+        self.model = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, output_dim)
+        )
+
+    def forward(self, X):
+        x_real = X.real.flatten()
+        x_imag = X.imag.flatten()
+        x = torch.cat([x_real, x_imag], dim=0).unsqueeze(0)
+        out = self.model(x).squeeze(0)
+
+        return {
+            'raw_p': out[:self.cfg['num_layers']],
+            'raw_lambda': out[self.cfg['num_layers']:]
+        }
+
+class ComplexConvParamPredictor(nn.Module):
+    """
+    CNN-based model that processes complex input using real+imag channel stacking.
+    Input: X ∈ ℂ^{5×8} → stacked to (2, 5, 8)
+    Output: raw_p and raw_lambda for each unfolded layer.
+    """
+
+    def __init__(self, cfg):
+        super().__init__()
+        self.cfg = cfg
+        self.N = cfg['N']
+        self.T_snap = cfg['T']
+        self.num_layers = cfg['num_layers']
+
+        self.cnn = nn.Sequential(
+            nn.Conv2d(in_channels=2, out_channels=16, kernel_size=(3, 3), padding=1),
+            nn.ReLU(),
+            nn.Conv2d(16, 32, kernel_size=(3, 3), padding=1),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d((2, 2)),  # reduce spatial size
+        )
+
+        self.mlp = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(32 * 2 * 2, 128),
+            nn.ReLU(),
+            nn.Linear(128, 2 * self.num_layers)
+        )
+
+    def forward(self, X):
+        """
+        Input:
+            X: complex-valued input (5, 8)
+        Output:
+            dict with 'raw_p' and 'raw_lambda', each of shape (num_layers,)
+        """
+        x_real = X.real.unsqueeze(0)  # (1, 5, 8)
+        x_imag = X.imag.unsqueeze(0)  # (1, 5, 8)
+        x = torch.cat([x_real, x_imag], dim=0).unsqueeze(0)  # (1, 2, 5, 8)
+
+        features = self.cnn(x)  # (1, 32, 2, 2)
+        out = self.mlp(features).squeeze(0)  # (2*T,)
+
+        return {
+            'raw_p':      out[:self.num_layers],
+            'raw_lambda': out[self.num_layers:]
+        }
+            
+class FullyConnectedParamPredictor(nn.Module):
+    """
+    Fully connected neural network to predict raw_p and raw_lambda values
+    for each of the T unfolded iterations, given the 5×8 phasor input.
+    """
+
+    def __init__(self, cfg):
+        super().__init__()
+        self.cfg = cfg
+        self.N = cfg['N']  # number of antenna elements
+        self.T_snap = cfg['T']  # number of snapshots
+        self.num_layers = cfg['num_layers']  # T: unfolding depth
+
+        input_dim = 2 * self.N * self.T_snap  # Real + Imag parts
+        hidden_dim = 128  # can be tuned
+        output_dim = 2 * self.num_layers  # 2 scalars per layer: raw_p, raw_lambda
+
+        self.model = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, output_dim)
+        )
+
+    def forward(self, X):
+        """
+        Input:
+            X: torch.Tensor of shape (N, T_snap), dtype=torch.complex64
+        Output:
+            raw_params: torch.Tensor of shape (2, num_layers)
+        """
+        # Flatten and split real/imag
+        x_real = X.real.flatten()
+        x_imag = X.imag.flatten()
+        x = torch.cat([x_real, x_imag], dim=0).unsqueeze(0)  # shape (1, 2*N*T)
+
+        out = self.model(x)  # shape (1, 2*T)
+        raw_params = out.view(2, self.num_layers)  # shape (2, T)
+        return raw_params
+
+
 class LIAA_Net_Config(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
-        self.layers = nn.ModuleList([
-            LIAALayerConfig(cfg) for _ in range(cfg['num_layers'])
-        ])
+        self.num_layers = cfg['num_layers']
+        self.param_predictor_module = cfg['param_predictor_module']
+        self.layers = nn.ModuleList([LIAALayerConfig(cfg) for _ in range(self.num_layers)])
+        self.param_predictor = self.build_param_predictor(cfg)
 
     def forward(self, gamma_init, A, X):
         gamma = gamma_init
@@ -722,16 +1026,43 @@ class LIAA_Net_Config(nn.Module):
             gamma = preserve_energy(X, gamma)
 
         # Norm Factor
-        s_norm_fact = self.cfg['s_norm_factor']
+        # s_norm_fact = self.cfg['s_norm_factor']
         # X, _ = normalize_cs_input(X, s_norm_fact)
+        # Show model summary
+        is_complex = True  # since X is complex-valued
+        show_model_summary(self.param_predictor, X.shape, model_name=config['param_predictor'].upper(), is_complex=is_complex)
 
-        for lyr in self.layers:
-            gamma = lyr(gamma, A, X)
-  
+
+        # Predict unfolding parameters from the input signal X
+        raw_params = self.param_predictor(X)  # shape (2, num_layers)
+        raw_p_seq = raw_params[0]  # shape (T,)
+        raw_l_seq = raw_params[1]  # shape (T,)
+
+        for t, layer in enumerate(self.layers):
+            unfolded_params = {
+                'raw_p': raw_p_seq[t],
+                'raw_lambda': raw_l_seq[t],
+            }
+            gamma = layer(gamma, A, X, unfolded_params)
             gamma_progress.append(gamma)
 
         return gamma, gamma_progress
 
+    def build_param_predictor(self, cfg):
+        match self.param_predictor_module:
+            case 'FullyConnected': 
+                return FullyConnectedParamPredictor(cfg)
+            case 'MLP':
+                return MLPParamPredictor(cfg)
+            case 'Transformer':
+                return TransformerParamPredictor(cfg)
+            case 'Mixer':
+                return MixerParamPredictor(cfg)
+            case 'ComplexConv':
+                return ComplexConvParamPredictor(cfg)
+            case _:
+                raise ValueError(f"Unknown param_predictor: {cfg['param_predictor']}")
+            
 # ——————————————————————————————————————————————————————————————
 # 7) Loss & peak‐finder
 # ——————————————————————————————————————————————————————————————
