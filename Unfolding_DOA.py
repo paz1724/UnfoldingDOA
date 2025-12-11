@@ -949,16 +949,21 @@ class ComplexConvParamPredictor(nn.Module):
     def forward(self, X):
         """
         Input:
-            X: complex-valued input (5, 8)
+            X: complex-valued input of shape (N, T) or (B, N, T)
         Output:
             dict with 'raw_p' and 'raw_lambda', each of shape (num_layers,)
         """
-        x_real = X.real.unsqueeze(0)  # (1, 5, 8)
-        x_imag = X.imag.unsqueeze(0)  # (1, 5, 8)
-        x = torch.cat([x_real, x_imag], dim=0).unsqueeze(0)  # (1, 2, 5, 8)
+        # Ensure a batch dimension but do not create an extra one if it already exists
+        if X.dim() == 2:           # (N, T)
+            X = X.unsqueeze(0)     # (1, N, T)
+        elif X.dim() != 3:         # unexpected rank
+            raise ValueError(f"Expected X with 2 or 3 dims, got {X.dim()} dims: {tuple(X.shape)}")
 
-        features = self.cnn(x)  # (1, 32, 2, 2)
-        out = self.mlp(features).squeeze(0)  # (2*T,)
+        # Stack real/imag along the channel dimension → (B, 2, N, T)
+        x = torch.stack((X.real, X.imag), dim=1)
+
+        features = self.cnn(x)              # (B, 32, 2, 2)
+        out = self.mlp(features).squeeze(0) # (2*T,) when B=1
 
         return {
             'raw_p':      out[:self.num_layers],
@@ -1015,6 +1020,7 @@ class LIAA_Net_Config(nn.Module):
         self.param_predictor_module = cfg['param_predictor_module']
         self.layers = nn.ModuleList([LIAALayerConfig(cfg) for _ in range(self.num_layers)])
         self.param_predictor = self.build_param_predictor(cfg)
+        self._summary_shown = False  # prevent repeated torchinfo prints
 
     def forward(self, gamma_init, A, X):
         gamma = gamma_init
@@ -1028,15 +1034,30 @@ class LIAA_Net_Config(nn.Module):
         # Norm Factor
         # s_norm_fact = self.cfg['s_norm_factor']
         # X, _ = normalize_cs_input(X, s_norm_fact)
-        # Show model summary
-        is_complex = True  # since X is complex-valued
-        show_model_summary(self.param_predictor, X.shape, model_name=config['param_predictor'].upper(), is_complex=is_complex)
+        # Show model summary once (helpful when running per-batch)
+        if not self._summary_shown:
+            is_complex = True  # since X is complex-valued
+            show_model_summary(
+                self.param_predictor,
+                X.shape,
+                model_name=config['param_predictor'].upper(),
+                is_complex=is_complex
+            )
+            self._summary_shown = True
 
 
         # Predict unfolding parameters from the input signal X
-        raw_params = self.param_predictor(X)  # shape (2, num_layers)
-        raw_p_seq = raw_params[0]  # shape (T,)
-        raw_l_seq = raw_params[1]  # shape (T,)
+        raw_params = self.param_predictor(X)
+
+        if isinstance(raw_params, dict):
+            raw_p_seq = raw_params['raw_p']
+            raw_l_seq = raw_params['raw_lambda']
+        else:
+            # assume tensor shaped (2, T) or (B, 2, T); squeeze batch if present
+            if raw_params.dim() == 3:
+                raw_params = raw_params.squeeze(0)
+            raw_p_seq = raw_params[0]
+            raw_l_seq = raw_params[1]
 
         for t, layer in enumerate(self.layers):
             unfolded_params = {
